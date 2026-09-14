@@ -249,23 +249,67 @@
             } catch (e) { /* abaikan bila Web Audio tak tersedia */ }
         }
 
-        // ================= MUAT DATA PAPAN (statistik & ringkasan kelas) =================
-        async function loadBoardData() {
+        // ================= DATA LOKAL (dimuat sekali dari server) =================
+        // Menyimpan salinan anggota, kehadiran, dan kebijakan jadwal secara lokal,
+        // supaya keputusan Masuk/Pulang/Tepat-Waktu/Terlambat/duplikat bisa dihitung
+        // INSTAN di browser tanpa menunggu round-trip ke server setiap kali scan.
+        const localData = { members: [], attendance: [], config: { schedule: {} } };
+
+        function isTodayTimestamp(ts) {
+            const d = new Date(ts);
+            const now = new Date();
+            return d.getFullYear() === now.getFullYear() &&
+                   d.getMonth() === now.getMonth() &&
+                   d.getDate() === now.getDate();
+        }
+        function getTodayAttendance() {
+            return localData.attendance.filter(log => isTodayTimestamp(log.timestamp));
+        }
+        const JS_DAY_TO_NAME = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+        function getDayName(date) {
+            return JS_DAY_TO_NAME[date.getDay()];
+        }
+        function getTodaySchedule() {
+            const dayName = getDayName(new Date());
+            const sched = localData.config && localData.config.schedule ? localData.config.schedule[dayName] : null;
+            return sched || { active: true, timeLate: "07:15", timeLeave: "13:30" };
+        }
+
+        async function loadInitData() {
             try {
-                const res = await fetch(`${APPS_SCRIPT_URL}?action=board`);
+                const res = await fetch(`${APPS_SCRIPT_URL}?action=initdata`);
                 const data = await res.json();
                 if (!data.success) {
-                    console.error("Gagal memuat data papan:", data.error);
+                    console.error("Gagal memuat data awal:", data.error);
                     return;
                 }
-                document.getElementById("stat-siswa").innerText = data.totalSiswa;
-                document.getElementById("stat-kelas").innerText = data.totalKelas;
-                document.getElementById("stat-jammasuk").innerText = data.scheduleActive ? data.timeLate : "Libur";
-                document.getElementById("stat-jampulang").innerText = data.scheduleActive ? data.timeLeave : "Libur";
-                renderClassSummary(data.classSummary || []);
+                localData.members = data.members || [];
+                localData.attendance = data.attendance || [];
+                localData.config = data.config || { schedule: {} };
+                renderStatsAndClassSummary();
             } catch (err) {
-                console.error("Gagal memuat data papan:", err);
+                console.error("Gagal memuat data awal:", err);
             }
+        }
+
+        function renderStatsAndClassSummary() {
+            const siswaList = localData.members.filter(m => m.role === "Siswa");
+            const totalKelas = new Set(siswaList.map(m => m.detail)).size;
+            const today = getTodaySchedule();
+
+            document.getElementById("stat-siswa").innerText = siswaList.length;
+            document.getElementById("stat-kelas").innerText = totalKelas;
+            document.getElementById("stat-jammasuk").innerText = today.active ? today.timeLate : "Libur";
+            document.getElementById("stat-jampulang").innerText = today.active ? today.timeLeave : "Libur";
+
+            const todayMasukBarcodes = new Set(getTodayAttendance().filter(l => l.type === "Masuk").map(l => l.barcode));
+            const perKelas = {};
+            siswaList.forEach(m => {
+                if (!perKelas[m.detail]) perKelas[m.detail] = { kelas: m.detail, total: 0, sudahAbsen: 0 };
+                perKelas[m.detail].total++;
+                if (todayMasukBarcodes.has(m.barcode)) perKelas[m.detail].sudahAbsen++;
+            });
+            renderClassSummary(Object.keys(perKelas).sort().map(k => perKelas[k]));
         }
 
         function renderClassSummary(classSummary) {
@@ -372,34 +416,81 @@
         }
 
         // ================= PROSES SATU KALI SCAN (dipanggil oleh kamera ATAU USB) =================
-        let isProcessingScan = false;
-        async function processScan(barcodeValue) {
+        // Pola "Optimistic UI": keputusan (anggota valid/tidak, Masuk/Pulang, Tepat
+        // Waktu/Terlambat, duplikat) dihitung INSTAN dari data lokal yang sudah
+        // dimuat di awal (loadInitData), sehingga operator tidak merasakan jeda.
+        // Penyimpanan ke Google Sheets tetap berjalan di latar belakang setelahnya;
+        // kalau ternyata gagal/ditolak server, feedback akan dikoreksi otomatis.
+        function processScan(barcodeValue) {
             barcodeValue = (barcodeValue || "").trim();
-            if (!barcodeValue || isProcessingScan) return;
-            isProcessingScan = true;
+            if (!barcodeValue) return;
 
-            try {
-                const res = await fetch(`${APPS_SCRIPT_URL}?action=scan&barcode=${encodeURIComponent(barcodeValue)}`);
-                const data = await res.json();
-                const now = new Date().toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-                if (data.success) {
-                    playTone("success");
-                    setScannerFeedbackVisual("success", "Absen Berhasil", `Presensi ${data.type} tercatat (${data.status}).`, data.member);
-                    pushLiveFeed(data.member.name, now, `${data.type} - ${data.status}`, true);
-                    if (data.member.role === "Siswa") bumpClassSummary(data.member.detail);
-                } else {
-                    playTone("error");
-                    setScannerFeedbackVisual("error", "Absen Ditolak", data.error || "Terjadi kesalahan.", null);
-                    if (data.member) pushLiveFeed(data.member.name, now, "Ditolak", false);
-                }
-            } catch (err) {
+            const member = localData.members.find(m => m.id === barcodeValue || m.barcode === barcodeValue);
+            if (!member) {
                 playTone("error");
-                setScannerFeedbackVisual("error", "Gagal Terhubung", "Tidak bisa menghubungi server. Cek koneksi internet lalu coba lagi.", null);
-                console.error(err);
-            } finally {
-                isProcessingScan = false;
+                setScannerFeedbackVisual("error", "Barcode Tidak Dikenal", `ID "${barcodeValue}" belum terdaftar di database sekolah.`, null);
+                return;
             }
+
+            const todaySchedule = getTodaySchedule();
+            if (!todaySchedule.active) {
+                playTone("error");
+                setScannerFeedbackVisual("error", "Hari Libur", `Absensi dinonaktifkan untuk hari ${getDayName(new Date())} pada kebijakan sekolah.`, null);
+                return;
+            }
+
+            const now = new Date();
+            const currTimeStr = now.toTimeString().substring(0, 5); // "HH:MM"
+            let type = "Masuk";
+            if (currTimeStr >= todaySchedule.timeLeave) {
+                type = "Pulang";
+            }
+
+            const alreadyScanned = getTodayAttendance().some(log => log.barcode === member.barcode && log.type === type);
+            if (alreadyScanned) {
+                playTone("error");
+                setScannerFeedbackVisual("error", "Sudah Tercatat", `${member.name} sudah absen "${type}" hari ini.`, null);
+                return;
+            }
+
+            let status = "Tepat Waktu";
+            if (type === "Masuk" && currTimeStr > todaySchedule.timeLate) {
+                status = "Terlambat";
+            }
+
+            const newLog = {
+                id: "L" + Date.now(),
+                barcode: member.barcode,
+                name: member.name,
+                role: member.role,
+                type: type,
+                timestamp: Date.now(),
+                status: status
+            };
+
+            // === FEEDBACK INSTAN ===
+            localData.attendance.unshift(newLog);
+            playTone("success");
+            setScannerFeedbackVisual("success", "Absen Berhasil", `Presensi ${type} tercatat (${status}).`, member);
+            pushLiveFeed(member.name, now.toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit', second: '2-digit' }), `${type} - ${status}`, true);
+            if (member.role === "Siswa" && type === "Masuk") bumpClassSummary(member.detail);
+
+            // === SINKRON KE CLOUD DI LATAR BELAKANG ===
+            fetch(`${APPS_SCRIPT_URL}?action=scan&barcode=${encodeURIComponent(member.barcode)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) rollbackFailedScan(newLog, data.error || "Ditolak server.");
+                })
+                .catch(err => rollbackFailedScan(newLog, "Tidak bisa menghubungi server."));
+        }
+
+        // Membatalkan catatan yang gagal tersimpan ke Cloud, lalu memberi tahu
+        // operator secara jelas bahwa anggota tsb perlu discan ulang.
+        function rollbackFailedScan(failedLog, errorMessage) {
+            const idx = localData.attendance.findIndex(log => log.id === failedLog.id);
+            if (idx !== -1) localData.attendance.splice(idx, 1);
+            renderStatsAndClassSummary();
+            setScannerFeedbackVisual("error", "Gagal Tersimpan ke Cloud", `Absen ${failedLog.name} TIDAK tersimpan. Mohon scan ulang. (${errorMessage})`, null);
         }
 
         // ================= INPUT SCANNER USB / MANUAL =================
@@ -531,8 +622,8 @@
         }
 
         // ================= INISIALISASI =================
-        loadBoardData();
-        setInterval(loadBoardData, 60000); // refresh ringkasan kelas tiap 1 menit
+        loadInitData();
+        setInterval(loadInitData, 60000); // sinkron ulang data tiap 1 menit (mis. ada scan dari perangkat lain)
     </script>
 </body>
 </html>
