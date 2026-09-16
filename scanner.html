@@ -231,21 +231,49 @@
         function playTone(type) {
             try {
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = "sine";
                 if (type === "success") {
-                    osc.frequency.setValueAtTime(880, ctx.currentTime);
-                    osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.1);
+                    const o1 = ctx.createOscillator();
+                    const g1 = ctx.createGain();
+                    o1.frequency.setValueAtTime(950, ctx.currentTime);
+                    o1.connect(g1); g1.connect(ctx.destination);
+                    g1.gain.setValueAtTime(0.1, ctx.currentTime);
+                    o1.start(); o1.stop(ctx.currentTime + 0.08);
+
+                    setTimeout(() => {
+                        const o2 = ctx.createOscillator();
+                        const g2 = ctx.createGain();
+                        o2.frequency.setValueAtTime(1150, ctx.currentTime);
+                        o2.connect(g2); g2.connect(ctx.destination);
+                        g2.gain.setValueAtTime(0.1, ctx.currentTime);
+                        o2.start(); o2.stop(ctx.currentTime + 0.08);
+                    }, 100);
+                } else if (type === "warning") {
+                    // Dua bip pendek nada sedang - dipakai untuk "sudah absen" / "hari libur"
+                    // (beda dari 'success' yang naik, dan 'error' yang buzz rendah keras).
+                    [0, 160].forEach(delay => {
+                        setTimeout(() => {
+                            const o = ctx.createOscillator();
+                            const g = ctx.createGain();
+                            o.type = "square";
+                            o.frequency.setValueAtTime(520, ctx.currentTime);
+                            o.connect(g); g.connect(ctx.destination);
+                            g.gain.setValueAtTime(0.1, ctx.currentTime);
+                            o.start();
+                            g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+                            o.stop(ctx.currentTime + 0.12);
+                        }, delay);
+                    });
                 } else {
-                    osc.frequency.setValueAtTime(220, ctx.currentTime);
+                    const o = ctx.createOscillator();
+                    const g = ctx.createGain();
+                    o.type = "sawtooth";
+                    o.frequency.setValueAtTime(130, ctx.currentTime);
+                    o.connect(g); g.connect(ctx.destination);
+                    g.gain.setValueAtTime(0.12, ctx.currentTime);
+                    o.start();
+                    g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+                    o.stop(ctx.currentTime + 0.35);
                 }
-                gain.gain.setValueAtTime(0.15, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.3);
             } catch (e) { /* abaikan bila Web Audio tak tersedia */ }
         }
 
@@ -310,6 +338,7 @@
                 if (todayMasukBarcodes.has(m.barcode)) perKelas[m.detail].sudahAbsen++;
             });
             renderClassSummary(Object.keys(perKelas).sort().map(k => perKelas[k]));
+            renderLiveFeed();
         }
 
         function renderClassSummary(classSummary) {
@@ -353,29 +382,34 @@
                 .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
         }
 
-        // ================= FEED AKTIVITAS TERBARU (sesi ini saja) =================
-        let liveFeedData = [];
-        function pushLiveFeed(name, time, statusText, ok) {
-            liveFeedData.unshift({ name, time, statusText, ok });
-            if (liveFeedData.length > 20) liveFeedData.length = 20;
-            renderLiveFeed();
-        }
+        // ================= FEED AKTIVITAS TERBARU (aktivitas HARI INI, bukan cuma sesi ini) =================
+        // Diambil langsung dari localData.attendance (bukan array terpisah), supaya:
+        // - Tetap terekam & tampil walau halaman di-refresh atau sesi baru dibuka
+        // - Ikut menampilkan aktivitas dari perangkat pemindai lain (tersinkron tiap 1 menit)
         function renderLiveFeed() {
             const tbody = document.getElementById("live-feed-body");
             const emptyState = document.getElementById("live-feed-empty");
             tbody.innerHTML = "";
-            if (liveFeedData.length === 0) {
+
+            const todayLogs = getTodayAttendance()
+                .slice()
+                .sort((a, b) => b.timestamp - a.timestamp)
+                .slice(0, 20);
+
+            if (todayLogs.length === 0) {
                 emptyState.classList.remove("hidden");
                 return;
             }
             emptyState.classList.add("hidden");
-            liveFeedData.forEach(item => {
+
+            todayLogs.forEach(log => {
                 const tr = document.createElement("tr");
                 tr.className = "hover:bg-white/5 transition-colors";
+                const timeStr = new Date(log.timestamp).toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 tr.innerHTML = `
-                    <td class="px-4 py-2.5 font-semibold text-white">${escapeHtml(item.name)}</td>
-                    <td class="px-4 py-2.5 font-mono text-emerald-200/70">${item.time}</td>
-                    <td class="px-4 py-2.5 font-bold ${item.ok ? 'text-emerald-300' : 'text-rose-300'}">${escapeHtml(item.statusText)}</td>
+                    <td class="px-4 py-2.5 font-semibold text-white">${escapeHtml(log.name)}</td>
+                    <td class="px-4 py-2.5 font-mono text-emerald-200/70">${timeStr}</td>
+                    <td class="px-4 py-2.5 font-bold text-emerald-300">${escapeHtml(log.type)} - ${escapeHtml(log.status)}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -434,7 +468,7 @@
 
             const todaySchedule = getTodaySchedule();
             if (!todaySchedule.active) {
-                playTone("error");
+                playTone("warning");
                 setScannerFeedbackVisual("error", "Hari Libur", `Absensi dinonaktifkan untuk hari ${getDayName(new Date())} pada kebijakan sekolah.`, null);
                 return;
             }
@@ -448,7 +482,7 @@
 
             const alreadyScanned = getTodayAttendance().some(log => log.barcode === member.barcode && log.type === type);
             if (alreadyScanned) {
-                playTone("error");
+                playTone("warning");
                 setScannerFeedbackVisual("error", "Sudah Tercatat", `${member.name} sudah absen "${type}" hari ini.`, null);
                 return;
             }
@@ -472,7 +506,7 @@
             localData.attendance.unshift(newLog);
             playTone("success");
             setScannerFeedbackVisual("success", "Absen Berhasil", `Presensi ${type} tercatat (${status}).`, member);
-            pushLiveFeed(member.name, now.toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit', second: '2-digit' }), `${type} - ${status}`, true);
+            renderLiveFeed();
             if (member.role === "Siswa" && type === "Masuk") bumpClassSummary(member.detail);
 
             // === SINKRON KE CLOUD DI LATAR BELAKANG ===
