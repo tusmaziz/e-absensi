@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mengalihkan...</title>
+    <!--
+        GitHub Pages adalah hosting FILE STATIS - dia tidak tahu apa-apa soal
+        path seperti /admin/datasiswa (itu hanya "URL virtual" yang diatur oleh
+        JavaScript di index.html). Kalau seseorang membuka link tersebut secara
+        langsung, atau me-refresh halaman saat sedang di path itu, GitHub Pages
+        tidak menemukan file sungguhan di path itu dan otomatis menampilkan
+        halaman 404.html ini.
+
+        Solusinya: alihkan balik ke halaman utama (index.html). Kalau orang yang
+        membukanya sedang login (sesi tersimpan di sessionStorage tab yang sama),
+        index.html akan otomatis mengembalikannya ke layar terakhir yang ia buka
+        (lihat fungsi restoreSessionIfAny() di index.html) - jadi pengalamannya
+        tetap mulus tanpa perlu logika tambahan di sini.
+    -->
+    <script>
+        // GANTI "/e-absensi/" bila nama folder/repo GitHub Pages Anda berbeda.
+        window.location.replace("/e-absensi/");
+    </script>
+</head>
+<body>
+    <p>Mengalihkan ke halaman utama...</p>
+</body>
+</html>
