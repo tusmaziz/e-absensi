@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>E-Absensi SMA Al Aziz Bangil</title>
+    <title>Smart Portal Absensi SMA Al Aziz Bangil</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Google Fonts -->
@@ -1104,6 +1104,18 @@
         document.querySelectorAll(".school-logo-img").forEach(function(img) {
             img.src = SCHOOL_LOGO_DATA_URI;
         });
+
+        // Favicon (ikon di tab browser) memakai logo sekolah yang sama
+        (function setFavicon() {
+            let link = document.querySelector("link[rel~='icon']");
+            if (!link) {
+                link = document.createElement("link");
+                link.rel = "icon";
+                document.head.appendChild(link);
+            }
+            link.type = "image/png";
+            link.href = SCHOOL_LOGO_DATA_URI;
+        })();
 
         // ======= GANTI SESUAI ALAMAT scanner.html DI GITHUB PAGES ANDA =======
         // Terminal Pemindai (baik dari kartu portal "Buka Scanner" maupun menu
