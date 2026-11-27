@@ -1,2 +1,2 @@
-# Absensi.Alaziz
+# SI-AZIZ
 Pencatatan Absensi Siswa dan Guru
